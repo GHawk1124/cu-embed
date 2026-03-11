@@ -1,6 +1,6 @@
 [package]
 name = "cu-embed"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Garrett Comes"]
 edition = "2021"
 build = "build.rs"
