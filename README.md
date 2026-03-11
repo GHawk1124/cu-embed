@@ -8,6 +8,7 @@ It is designed to work well with `cudarc`, `rust-embed`, and Nix-based builds.
 
 - Compiles one or more `.cu` files into per-architecture CUBINs.
 - Generates a conservative PTX fallback for forward compatibility.
+- Tracks local `.cuh` and `.h` dependencies automatically through `nvcc -MM`.
 - Writes a manifest describing the embedded assets.
 - Lets your runtime prefer exact-match CUBINs, then compatible CUBINs, then PTX.
 
@@ -34,6 +35,14 @@ fn main() {
 ```
 
 ## Runtime usage
+
+In your runtime crate's `Cargo.toml`, `rust-embed` must have the
+`interpolate-folder-path` feature enabled:
+
+```toml
+[dependencies]
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+```
 
 Your runtime crate needs a `rust-embed` asset type pointed at `$CU_EMBED_ASSET_DIR`:
 

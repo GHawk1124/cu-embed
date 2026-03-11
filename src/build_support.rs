@@ -106,6 +106,10 @@ impl Builder {
     /// This writes generated assets under `OUT_DIR/cu-embed` by default and exports
     /// `CU_EMBED_ASSET_DIR` so a `rust-embed` asset type can point at them using
     /// `#[folder = "$CU_EMBED_ASSET_DIR"]`.
+    ///
+    /// The builder also asks `nvcc` for non-system header dependencies and emits
+    /// `cargo:rerun-if-changed` directives for them, so edits to local `.cuh` and
+    /// `.h` files trigger rebuilds automatically.
     pub fn build(self) -> Result<BuildOutput, BuildError> {
         emit_cargo_env();
 
@@ -115,15 +119,20 @@ impl Builder {
             return Err(BuildError::NoSources);
         }
 
-        for source in &sources {
-            println!("cargo:rerun-if-changed={}", source.display());
-        }
-
         let arches = self.resolve_arches(&nvcc)?;
         if arches.is_empty() {
             return Err(BuildError::NoArchitectures);
         }
         let ptx_arch = self.resolve_ptx_arch(&arches)?;
+
+        let mut rerun_paths = BTreeSet::new();
+        for source in &sources {
+            rerun_paths.insert(source.clone());
+            rerun_paths.extend(self.discover_dependencies(&nvcc, source)?);
+        }
+        for path in &rerun_paths {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
 
         let asset_dir = self.default_output_dir()?;
         fs::create_dir_all(asset_dir.join("cubins"))?;
@@ -272,6 +281,71 @@ impl Builder {
         self.invoke_nvcc(nvcc, "-ptx", source, arch, output_path)
     }
 
+    fn discover_dependencies(
+        &self,
+        nvcc: &str,
+        source: &Path,
+    ) -> Result<BTreeSet<PathBuf>, BuildError> {
+        let depfile = self.default_output_dir()?.join("deps").join(
+            source
+                .file_name()
+                .ok_or_else(|| BuildError::InvalidKernelName(source.to_path_buf()))?,
+        );
+        let depfile = depfile.with_extension("d");
+        if let Some(parent) = depfile.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut command = Command::new(nvcc);
+        command
+            .arg("-MM")
+            .arg("-MF")
+            .arg(&depfile)
+            .arg("--std=c++14");
+
+        for include_dir in cuda_include_dirs()
+            .into_iter()
+            .chain(self.include_dirs.iter().cloned())
+        {
+            command.arg("-I").arg(include_dir);
+        }
+
+        if let Ok(ccbin) = env::var("NVCC_CCBIN") {
+            command.arg("-ccbin").arg(ccbin);
+        }
+
+        for arg in &self.nvcc_args {
+            command.arg(arg);
+        }
+
+        command.arg(source);
+        let output = command.output().map_err(|source_err| BuildError::Command {
+            command: format!("{nvcc} -MM"),
+            source: source_err,
+        })?;
+        if !output.status.success() {
+            return Err(BuildError::DependencyScanFailed {
+                source: source.to_path_buf(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        let depfile_contents =
+            fs::read_to_string(&depfile).map_err(|error| BuildError::MissingDependencyFile {
+                source: source.to_path_buf(),
+                depfile: depfile.clone(),
+                error,
+            })?;
+        parse_depfile_paths(&depfile_contents).map_err(|message| {
+            BuildError::InvalidDependencyFile {
+                source: source.to_path_buf(),
+                depfile,
+                message,
+            }
+        })
+    }
+
     fn invoke_nvcc(
         &self,
         nvcc: &str,
@@ -345,8 +419,23 @@ pub enum BuildError {
     InvalidKernelName(PathBuf),
     Io(std::io::Error),
     Json(serde_json::Error),
+    DependencyScanFailed {
+        source: PathBuf,
+        stdout: String,
+        stderr: String,
+    },
+    InvalidDependencyFile {
+        source: PathBuf,
+        depfile: PathBuf,
+        message: String,
+    },
     InvalidArchitecture(String),
     InvalidPtxArchitecture(String),
+    MissingDependencyFile {
+        source: PathBuf,
+        depfile: PathBuf,
+        error: std::io::Error,
+    },
     MissingOutput {
         source: PathBuf,
         arch: String,
@@ -390,6 +479,25 @@ impl fmt::Display for BuildError {
             }
             Self::Io(source) => source.fmt(f),
             Self::Json(source) => source.fmt(f),
+            Self::DependencyScanFailed {
+                source,
+                stdout,
+                stderr,
+            } => write!(
+                f,
+                "nvcc dependency scan failed for {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                source.display()
+            ),
+            Self::InvalidDependencyFile {
+                source,
+                depfile,
+                message,
+            } => write!(
+                f,
+                "invalid nvcc dependency file {} for {}: {message}",
+                depfile.display(),
+                source.display()
+            ),
             Self::InvalidArchitecture(arch) => {
                 write!(
                     f,
@@ -402,6 +510,16 @@ impl fmt::Display for BuildError {
                     "invalid CUDA PTX architecture `{arch}`; expected `compute_XX`, `compute_XXa`, or `sm_XX`"
                 )
             }
+            Self::MissingDependencyFile {
+                source,
+                depfile,
+                error,
+            } => write!(
+                f,
+                "nvcc reported dependencies for {}, but {} was not produced: {error}",
+                source.display(),
+                depfile.display()
+            ),
             Self::MissingOutput {
                 source,
                 arch,
@@ -584,6 +702,45 @@ fn default_ptx_arch(arches: &[String]) -> String {
 
 fn to_unix_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn parse_depfile_paths(raw: &str) -> Result<BTreeSet<PathBuf>, String> {
+    let normalized = raw.replace("\\\r\n", "").replace("\\\n", "");
+    let (_, deps) = normalized
+        .split_once(':')
+        .ok_or_else(|| "missing dependency rule separator".to_owned())?;
+
+    let mut paths = BTreeSet::new();
+    let mut current = String::new();
+    let mut escaping = false;
+
+    for ch in deps.chars() {
+        if escaping {
+            current.push(ch);
+            escaping = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => escaping = true,
+            ch if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    paths.insert(PathBuf::from(std::mem::take(&mut current)));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if escaping {
+        return Err("dangling escape in dependency file".to_owned());
+    }
+
+    if !current.is_empty() {
+        paths.insert(PathBuf::from(current));
+    }
+
+    Ok(paths)
 }
 
 fn parse_arch_number(arch: &str, prefix: &str) -> Option<u32> {

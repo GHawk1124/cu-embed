@@ -14,6 +14,8 @@ use crate::manifest::{CubinManifest, Manifest, MANIFEST_FILE_NAME};
 /// Loads embedded CUDA kernels and selects the best artifact for a device.
 ///
 /// `E` must be a `rust-embed` asset type pointed at the generated asset directory:
+/// your runtime crate must enable `rust-embed`'s `interpolate-folder-path`
+/// feature for `$CU_EMBED_ASSET_DIR` interpolation to work.
 ///
 /// ```ignore
 /// use rust_embed::RustEmbed;
