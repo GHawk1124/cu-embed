@@ -1,0 +1,25 @@
+[package]
+name = "cu-embed"
+version = "0.1.0"
+authors = ["Garrett Comes"]
+edition = "2021"
+build = "build.rs"
+description = "Compile CUDA kernels with nvcc, embed cubin/PTX artifacts, and load the best module at runtime."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/GHawk1124/cu-embed"
+homepage = "https://github.com/GHawk1124/cu-embed"
+documentation = "https://docs.rs/cu-embed"
+keywords = ["cuda", "nvcc", "gpu", "embed", "nix"]
+categories = ["development-tools::build-utils", "hardware-support"]
+exclude = ["result", "target"]
+
+[dependencies]
+cudarc = { version = "0.19.3", default-features = false, features = ["driver", "nvrtc", "std", "static-linking", "cuda-version-from-build-system"] }
+rust-embed = { version = "8.11.0", features = ["interpolate-folder-path"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[build-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
