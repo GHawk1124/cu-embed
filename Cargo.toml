@@ -15,7 +15,7 @@ categories = ["development-tools::build-utils", "hardware-support"]
 exclude = ["result", "target"]
 
 [dependencies]
-cudarc = { version = "0.19.3", default-features = false, features = ["driver", "nvrtc", "std", "dynamic-linking"] }
+cudarc = { version = "0.19.3", default-features = false, features = ["driver", "nvrtc", "std", "dynamic-linking", "cuda-version-from-build-system"] }
 rust-embed = { version = "8.11.0", features = ["interpolate-folder-path"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
