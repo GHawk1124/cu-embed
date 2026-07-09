@@ -390,6 +390,16 @@ impl Builder {
             });
         }
 
+        // Forward nvcc/ptxas diagnostics (e.g. `-Xptxas -v` register counts) to cargo.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stdout.lines().chain(stderr.lines()) {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                println!("cargo:warning={trimmed}");
+            }
+        }
+
         let metadata = fs::metadata(output_path).map_err(|error| BuildError::MissingOutput {
             source: source.to_path_buf(),
             arch: arch.to_owned(),

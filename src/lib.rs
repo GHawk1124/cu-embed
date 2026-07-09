@@ -9,4 +9,4 @@ pub mod build {
     pub use crate::build_support::{BuildError, BuildOutput, Builder};
 }
 
-pub use runtime::{EmbeddedCudaModules, RuntimeError};
+pub use runtime::{ArtifactKind, ArtifactSelection, EmbeddedCudaModules, RuntimeError};
